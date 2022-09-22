@@ -4,13 +4,15 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothHeadset;
+import android.bluetooth.BluetoothHealth;
+import android.bluetooth.BluetoothProfile;
 import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.location.LocationManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.SystemClock;
@@ -25,7 +27,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
-import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
@@ -69,6 +70,12 @@ public class MainActivity extends AppCompatActivity {
     ConnectedThread mThreadConnectedBt;
     Handler mBluetoothHandler;
 
+    // 블루투스 헤드셋 서비스에 필요한 객체 선언
+    BluetoothHeadset mBluetoothHeadset;
+
+    // 블루투스 헬스케어 서비스에 필요한 객체 선언
+    BluetoothHealth mBluetoothHealth;
+
     // 블루투스 시리얼 통신에 필요한 UUID 상수 값 선언 (스마트폰 - 아두이노 간 통신)
     final static UUID BT_UUID1 = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
@@ -87,8 +94,55 @@ public class MainActivity extends AppCompatActivity {
     // 위치 서비스 활성화에 필요한 객체 선언
     LocationManager locationManager;
 
+    // BluetoothProfile IPC 클라이언트가 서비스에 연결되거나 연결이 끊어진 경우를 알리기 위한 인터페이스
+    private final BluetoothProfile.ServiceListener mProfileListener = new BluetoothProfile.ServiceListener() {
+
+        @Override
+        public void onServiceConnected(int profile, BluetoothProfile proxy) {
+            if (profile == BluetoothProfile.HEADSET) {
+                mBluetoothHeadset = (BluetoothHeadset) proxy;
+
+                // Establish connection of the profile proxy to the HEADSET Service.
+                mBluetoothAdapter.getProfileProxy(getApplicationContext(), mProfileListener, BluetoothProfile.HEADSET);
+
+                // Call functions on mBluetoothHeadset to check if Bluetooth SCO audio is connected.
+                if (mExtraDevice != null) {
+                    mExtraDevice = mBluetoothHeadset.getConnectedDevices();
+                    for (final BluetoothDevice HeadsetDevice : mExtraDevice) {
+                        mBluetoothHeadset.isAudioConnected(HeadsetDevice);
+                        return;
+
+                    }
+                }
+
+                // Close the connection of the profile proxy to the HEADSET Service.
+                mBluetoothAdapter.closeProfileProxy(BluetoothProfile.HEADSET, mBluetoothHeadset);
+
+            } else if (profile == BluetoothProfile.HEALTH) {
+                mBluetoothHealth = (BluetoothHealth) proxy;
+
+                // Establish connection of the profile proxy to the HEALTH Service.
+                mBluetoothAdapter.getProfileProxy(getApplicationContext(), mProfileListener, BluetoothProfile.HEALTH);
+
+                // Close the connection of the profile proxy to the HEALTH Service.
+                mBluetoothAdapter.closeProfileProxy(BluetoothProfile.HEALTH, mBluetoothHealth);
+
+            }
+        }
+
+        @Override
+        public void onServiceDisconnected(int profile) {
+            if (profile == BluetoothProfile.HEADSET) {
+                mBluetoothHeadset = null;
+
+            } else if (profile == BluetoothProfile.HEALTH) {
+                mBluetoothHealth = null;
+
+            }
+        }
+    };
+
     @SuppressLint("SetTextI18n")
-    @RequiresApi(api = Build.VERSION_CODES.Q)
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -125,6 +179,7 @@ public class MainActivity extends AppCompatActivity {
 
             }
         });
+
         // 연결하기 : mBtnConnect 버튼 이벤트 처리
         mBtnConnect.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -143,6 +198,7 @@ public class MainActivity extends AppCompatActivity {
         mBtnSearch.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+
                 // 검색하기 버튼을 클릭할 때마다 메서드를 번갈아가면서 실행합니다.
                 isSearching = !isSearching;
                 if (isSearching) {
@@ -210,6 +266,9 @@ public class MainActivity extends AppCompatActivity {
     private void bluetoothOff() {
         if (mBluetoothAdapter.isEnabled()) {
             mBluetoothAdapter.disable();
+            // 블루투스 비활성화 시 블루투스 페어링 기기 클릭 이벤트를 활성화한다.
+            mList_vBtItem.setEnabled(true);
+
             mTvBluetoothStatus.setText("블루투스 비활성화");
             Toast.makeText(getApplicationContext(), "사용자가 블루투스를 비활성화 합니다.",
                     Toast.LENGTH_SHORT).show();
@@ -229,7 +288,7 @@ public class MainActivity extends AppCompatActivity {
     */
 
     // 연결하기 버튼을 클릭함으로써 기존 디바이스에 이미 존재하는
-    // 페어링 된 블루투스 기기 목록들을 나열하는 블루투스 이벤트
+    // 페어링 된 블루투스 기기 리스트를 나열하는 블루투스 이벤트
     private void listPairedDevice() {
         Divide_Case_by(); // mBluetoothAdapter
         // 만약 페어링 된 블루투스 기기가 하나라도 있으면
@@ -248,6 +307,7 @@ public class MainActivity extends AppCompatActivity {
                 ListPairedDevice.add(device.getAddress());
                 // ArrayAdapter에 리스트뷰 주변의 블루투스 기기 이름을 저장하고 화면에 뿌려준다.
                 mBtAryAdapter.add(device.getName());
+                // ArrayAdapter에 리스트뷰 주변의 블루투스 기기 이름과 주소를 저장하고 화면에 뿌려준다.
 //              mBtAryAdapter.add(device.getName() + "\n" + device.getAddress());
                 // 리스트뷰에 저장된 주변의 블루투스 기기 데이터를 최신화한다.
                 mBtAryAdapter.notifyDataSetChanged();
@@ -258,10 +318,13 @@ public class MainActivity extends AppCompatActivity {
 
     // 블루투스어댑터의 활성화 여부에 따라 사건을 나눈다.
     private void Divide_Case_by() {
+        // 블루투스 ON/OFF/NULL 여부에 따라 케이스를 나누어 상황에 맞는 토스트 메시지를 전달한다.
         if (mBluetoothAdapter.isEnabled()) {
-            // 페어링 된 블루투스 기기의 리스트 가져오기
+            // 페어링 된 블루투스 기기 리스트 가져오기
             mPairedDevice = mBluetoothAdapter.getBondedDevices();
             mTvBluetoothStatus.setText("페어링 기기를 불러왔습니다.");
+            // 연결 버튼을 누를 때 블루투스 페어링 기기 클릭 이벤트를 활성화한다.
+            mList_vBtItem.setEnabled(true);
 
         } else if (mBluetoothAdapter.disable()) {
             Toast.makeText(getApplicationContext(), "블루투스를 먼저 활성화 시켜야합니다.",
@@ -282,12 +345,10 @@ public class MainActivity extends AppCompatActivity {
             switch (action) {
                 // 블루투스 기기 검색 시작 action
                 case BluetoothAdapter.ACTION_DISCOVERY_STARTED:
-                    // Toast.makeText(getApplicationContext(), "블루투스 기기 검색 시작", Toast.LENGTH_SHORT).show();
-                    mTvBluetoothStatus.setText("블루투스 기기 검색 중...");
-
                     // 검색 전, 화면 초기화하기!
                     if (mBtAryAdapter != null) {
                         mBtAryAdapter.clear();
+                        mTvBluetoothStatus.setText("블루투스 기기 검색 중...");
 
                     }
                     break;
@@ -299,41 +360,58 @@ public class MainActivity extends AppCompatActivity {
                     // 주변의 블루투스 기기가 null인 경우를 제외한다.
                     assert searchDevice != null;
 
+                    // 리스트(List)로 선언된 블루투스디바이스 객체 변수에
+                    // 검색한 주변의 블루투스 기기를 저장한다.
+                    if (mExtraDevice != null) {
+                        mExtraDevice.add(searchDevice);
+
+                    }
+
                     if (mPairedDevice != null && mPairedDevice.size() > 0) {
                         if (searchDevice.getName() != null) {
                             // 주변의 블루투스 기기 이름이 중복 표시되는 오류를 방지한다.
                             if (mBtAryAdapter.getPosition(searchDevice.getName()) == -1) {
                                 // ArrayList에 리스트뷰 주변의 블루투스 기기 주소를 저장한다.
                                 ListPairedDevice.add(searchDevice.getAddress());
-                                // ArrayAdapter에 리스트뷰 주변의 블루투스 기기 이름을 저장하고 화면에 뿌려준다.
-                                mBtAryAdapter.add(searchDevice.getName());
-//                              mBtAryAdapter.add(searchDevice.getName() + "\n" + searchDevice.getAddress());
-                                // 리스트뷰에 저장된 주변의 블루투스 기기 데이터를 최신화한다.
-                                mBtAryAdapter.notifyDataSetChanged();
+                                // 페어링 된 블루투스 기기 리스트에 주변의 블루투스 기기가 존재하면
+                                if (mPairedDevice.contains(searchDevice)) {
+                                    // 검색 화면에서 주변의 블루투스 기기 이름을 제거한다.
+                                    mBtAryAdapter.remove(searchDevice.getName());
 
+                                } else {
+                                    // 존재하지 않으면
+                                    // ArrayAdapter에 리스트뷰 주변의 블루투스 기기 이름을 저장하고 화면에 뿌려준다.
+                                    mBtAryAdapter.add(searchDevice.getName());
+                                    // ArrayAdapter에 리스트뷰 주변의 블루투스 기기 이름과 주소를 저장하고 화면에 뿌려준다.
+//                                  mBtAryAdapter.add(searchDevice.getName() + "\n" + searchDevice.getAddress());
+                                    // 리스트뷰에 저장된 주변의 블루투스 기기 데이터를 최신화한다.
+                                    mBtAryAdapter.notifyDataSetChanged();
+
+                                }
                             }
                         }
-                    }
 
-                    // 이유를 모르겠다. null인 경우에 검색 버튼을 누르면 기기 검색이 되지 않는다.
-                    // 연결 버튼을 먼저 누른 후에 기기 검색이 잘된다.
-                    if (mPairedDevice == null) {
+                        // 이유를 모르겠다. null인 경우에 검색 버튼을 누르면 기기 검색이 되지 않는다.
+                        // 연결 버튼을 먼저 누른 후에 기기 검색이 잘된다.
+
+                    } else if (mPairedDevice == null) {
                         // 블루투스가 현재 기기 검색 프로세스에 있다면
                         if (mBluetoothAdapter.isDiscovering()) {
                             // 즉시, 주변 블루투스 기기 검색을 종료한다.
                             mBluetoothAdapter.cancelDiscovery();
+                            // 주변 블루투스 기기 검색이 종료됨과 동시에
+                            if (mBluetoothAdapter.cancelDiscovery()) {
+                                // 검색 불가 상태를 토스트 메시지로 전달한다.
+                                Toast.makeText(getApplicationContext(),
+                                        "검색 불가! 연결 버튼을 먼저 누르십시오.", Toast.LENGTH_SHORT).show();
 
+                            }
                         }
                     }
-
-                    // 리스트(List)로 선언된 블루투스디바이스 객체 변수에
-                    // 검색한 주변의 블루투스 기기를 저장한다.
-                    mExtraDevice.add(searchDevice);
                     break;
 
                 // 블루투스 기기 검색 종료 action
                 case BluetoothAdapter.ACTION_DISCOVERY_FINISHED:
-                    // Toast.makeText(getApplicationContext(), "블루투스 기기 검색 종료", Toast.LENGTH_SHORT).show();
                     mTvBluetoothStatus.setText("블루투스 기기 검색을 종료합니다.");
                     // 블루투스 검색하기 버튼 활성화!
                     mBtnSearch.setEnabled(true);
@@ -346,7 +424,7 @@ public class MainActivity extends AppCompatActivity {
                     // 주변의 블루투스 기기가 null인 경우를 제외한다.
                     assert pairedDevice != null;
 
-                    // 즉, 페어링 요청 후 연결에 성공하면 다음에 페어링 기기를 불러올 때 데이터가 저장된다.
+                    // 즉, 페어링 요청 후 연결에 성공하면 다음에 페어링 기기를 불러올 때 리스트로 저장된다.
                     if (pairedDevice.getBondState() == BluetoothDevice.BOND_BONDED) {
                         // 주변의 블루투스 기기 이름이 중복 표시되는 오류를 방지한다.
                         if (mBtAryAdapter.getPosition(pairedDevice.getName()) == -1) {
@@ -375,8 +453,7 @@ public class MainActivity extends AppCompatActivity {
             startActivity(intent);
 
         } else {
-            Toast.makeText(getApplicationContext(), "위치 서비스가 이미 활성화 되었습니다.",
-                    Toast.LENGTH_SHORT).show();
+            mTvBluetoothStatus.setText("검색 버튼을 한 번 더 누르십시오...");
 
         }
     }
@@ -393,21 +470,33 @@ public class MainActivity extends AppCompatActivity {
     // 검색된 외부 블루투스 기기 목록을 나열하는 블루투스 이벤트
     private void listSearchDevice() {
 
-        // Action 등록을 위한 블루투스 브로드캐스트리시버 타입 선언
-        IntentFilter mSearchFilter = new IntentFilter();
-        mSearchFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
-        mSearchFilter.addAction(BluetoothDevice.ACTION_FOUND);
-        mSearchFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
-        mSearchFilter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
-        this.registerReceiver(mSearchReceiver, mSearchFilter);
+        // 블루투스 ON/ OFF/NULL 여부에 따라 케이스를 나누어 상황에 맞는 토스트 메시지를 전달한다.
+        if (mBluetoothAdapter.isEnabled()) {
+            // Action 등록을 위한 블루투스 브로드캐스트리시버 타입 선언
+            IntentFilter mSearchFilter = new IntentFilter();
+            mSearchFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
+            mSearchFilter.addAction(BluetoothDevice.ACTION_FOUND);
+            mSearchFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+            mSearchFilter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+            this.registerReceiver(mSearchReceiver, mSearchFilter);
 
-        // 블루투스 검색하기 버튼 비활성화!
-        mBtnSearch.setEnabled(false);
+            // 블루투스 검색하기 버튼 비활성화!
+            mBtnSearch.setEnabled(false);
 
-        // 블루투스가 현재 기기 검색 프로세스에 있는지 확인 후
-        if (!mBluetoothAdapter.isDiscovering()) {
-            // 검색 프로세스에 없다면 주변 블루투스 기기 검색을 시작
-            mBluetoothAdapter.startDiscovery();
+            // 블루투스가 현재 기기 검색 프로세스에 있는지 확인 후
+            if (!mBluetoothAdapter.isDiscovering()) {
+                // 검색 프로세스에 없다면 주변 블루투스 기기 검색을 시작
+                mBluetoothAdapter.startDiscovery();
+
+            }
+
+        } else if (mBluetoothAdapter.disable()) {
+            Toast.makeText(getApplicationContext(), "블루투스를 먼저 활성화 시켜야합니다.",
+                    Toast.LENGTH_SHORT).show();
+
+        } else {
+            Toast.makeText(getApplicationContext(), "This device does not support Bluetooth.",
+                    Toast.LENGTH_SHORT).show();
 
         }
     }
@@ -430,15 +519,13 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-
     // 블루투스 페어링 기기 리스트 중 하나를 클릭 시 나타나는 이벤트 처리
     private class myOnItemClickListener implements android.widget.AdapterView.OnItemClickListener {
         @SuppressLint("SetTextI18n")
         @Override
         public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
 
-            // 페어링 기기 클릭 후 "try..." 상태 메시지를 불러옵니다.
-            mTvBluetoothStatus.setText("try...");
+//          mTvBluetoothStatus.setText("try...");
 
             // 블루투스가 현재 기기 검색 프로세스에 있다면
             if (mBluetoothAdapter.isDiscovering()) {
@@ -447,27 +534,30 @@ public class MainActivity extends AppCompatActivity {
 
             }
 
-            // 블루투스 기기 페어링 요청하기
+            // 페어링된 내부 및 주변 블루투스 기기 이름 가져오기
+            final String selectedDeviceName = mBtAryAdapter.getItem(position);
+
+            // 페어링된 내부 및 주변 블루투스 기기 주소 가져오기
+            final String selectedDeviceAddress = ListPairedDevice.get(position);
+
+            // 주변 블루투스 기기 페어링 요청하기 => break 위치 유의!
             for (BluetoothDevice pairingDevice : mExtraDevice) {
                 try {
-                    Method method = pairingDevice.getClass().getMethod("createBond", (Class[]) null);
-                    method.invoke(pairingDevice, (Object[]) null);
+                    if (pairingDevice.getName().equals(selectedDeviceName)) {
+                        Method method = pairingDevice.getClass().getMethod("createBond", (Class[]) null);
+                        method.invoke(pairingDevice, (Object[]) null);
+                        break;
+
+                    }
 
                 } catch (Exception e) {
                     e.printStackTrace();
-                    break;
 
                 }
             }
 
-            // 페어링된 내부 및 외부 블루투스 기기 이름 가져오기
-            final String selectedDeviceName = mBtAryAdapter.getItem(position);
-
-            // 페어링된 내부 및 외부 블루투스 기기 주소 가져오기
-            final String selectedDeviceAddress = ListPairedDevice.get(position);
-
             // 연결에 필요한 값은 블루투스 기기의 주소입니다.
-            // for 문으로 페어링 된 모든 블루투스 기기를 검색을 하면서
+            // for 문으로 페어링 된 모든 블루투스 기기를 검색 하면서
             // 매개 변수 값과 비교하여 같으면 그 기기의 주소 값을 가져옵니다.
 
             for (BluetoothDevice bluetoothDevice : mPairedDevice) {
@@ -480,7 +570,9 @@ public class MainActivity extends AppCompatActivity {
 
             // 먼저, UUID(시리얼 통신용 ID)를 호출하여 블루투스소켓 객체를 가져온 후 초기화합니다.
             // 그리고, connect() 메서드를 호출하여 블루투스소켓 연결을 시작합니다.
+
             // 소켓 연결에 성공하면 ["Connected to" + 블루투스 기기 이름] 상태 메시지를 불러옵니다.
+            // 또한, 블루투스 연결 성공 상태에 맞는 토스트 메시지를 불러옵니다.
             // 만약 소켓 연결에 실패하면 "Connection failed!" 상태 메시지를 불러옵니다.
             // 또한, 블루투스 연결 실패 상태에 맞는 토스트 메시지를 불러옵니다.
 
@@ -488,17 +580,30 @@ public class MainActivity extends AppCompatActivity {
                 try {
                     mBluetoothSocket = mBluetoothDevice.createInsecureRfcommSocketToServiceRecord(BT_UUID1);
                     mBluetoothSocket.connect();
-                    mTvBluetoothStatus.setText("Connected to " + selectedDeviceName);
-                    // 블루투스 페어링 기기 연결 성공 시 블루투스 기기의 이름을 토스트 메시지로 전달합니다.
-                    Toast.makeText(getApplicationContext(),
-                            mBtAryAdapter.getItem(position) + " connected!", Toast.LENGTH_LONG).show();
+                    if (mBluetoothSocket.isConnected()) {
+                        mTvBluetoothStatus.setText("Connected to " + selectedDeviceName);
+                        // 블루투스 페어링 기기 연결 성공 시 연결된 블루투스 기기의 이름을 토스트 메시지로 전달합니다.
+                        Toast.makeText(getApplicationContext(),
+                                mBtAryAdapter.getItem(position) + " connected!!!", Toast.LENGTH_SHORT).show();
+
+                    }
+                    // 소켓 연결 성공 시 연결된 블루투스 페어링 기기 클릭 이벤트를 비활성화합니다.
+                    mList_vBtItem.setEnabled(!mBluetoothSocket.isConnected());
 
                 } catch (IOException e) {
-                    mTvBluetoothStatus.setText("Connection failed!");
-                    // 블루투스 페어링 기기 연결 실패 시 연결 실패 상태를 토스트 메시지로 전달합니다.
-                    Toast.makeText(getApplicationContext(),
-                            "블루투스 연결에 실패하였습니다.", Toast.LENGTH_SHORT).show();
+                    // 주변 블루투스 기기가 한 개 이상 있을 때
+                    if (mExtraDevice.size() > 0) {
+                        // 블루투스 페어링 기기 클릭 이벤트를 비활성화합니다.
+                        mList_vBtItem.setEnabled(false);
+                        Toast.makeText(getApplicationContext(),
+                                "연결하기 버튼을 누른 후 블루투스 연결을 시도하십시오.", Toast.LENGTH_SHORT).show();
 
+                    } else {
+                        mTvBluetoothStatus.setText("Connection failed!");
+                        // 블루투스 페어링 기기 연결 실패 시 연결 실패 상태를 토스트 메시지로 전달합니다.
+                        Toast.makeText(getApplicationContext(), "블루투스 연결에 실패하였습니다.", Toast.LENGTH_SHORT).show();
+
+                    }
                 }
             }
 
@@ -509,6 +614,9 @@ public class MainActivity extends AppCompatActivity {
                 mThreadConnectedBt = new ConnectedThread(mBluetoothSocket);
                 mThreadConnectedBt.start();
                 mBluetoothHandler.obtainMessage(BT_CONNECTING_STATUS, 1, -1).sendToTarget();
+
+            } else {
+                mThreadConnectedBt.cancel();
 
             }
         }
@@ -524,7 +632,6 @@ public class MainActivity extends AppCompatActivity {
 
         // 스레드 초기화 과정 => 데이터 송수신을 위한 작업을 수행합니다.
         public ConnectedThread(BluetoothSocket socket) {
-
             mmSocket = socket;
             InputStream tmpIn = null;
             OutputStream tmpOut = null;
@@ -553,7 +660,7 @@ public class MainActivity extends AppCompatActivity {
                 try {
                     int availableBytes = mmInStream.available();
                     if (availableBytes > 0) {
-                        // 버퍼 속도에 따라 초기 데이터 손실이 있을 수 있으므로, 약 0.2초간 버퍼를 지연시킴.
+                        // 버퍼 속도에 따라 초기 데이터 손실이 있을 수 있으므로, 약 0.1초간 버퍼를 지연시킴.
                         SystemClock.sleep(200);
                         bufferQueue.offer(new byte[1024]);
                         bytes = mmInStream.read(bufferQueue.peek());
